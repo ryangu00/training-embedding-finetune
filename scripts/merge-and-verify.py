@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """merge-and-verify.py [batch_dir] [out_file] [eval_file]
-合并 fanout 产出为训练集:去重 + schema 校验 + 失败统计 + (可选)剔除与评测集重叠的文档。
-评测集泄漏是特化训练最常见的自欺:训练集里混入 eval 文档 → 指标虚高。给 eval_file 即自动剔除。"""
+Merge fan-out output into a training set: dedupe + schema validation + failure stats + (optionally) drop documents overlapping the eval set.
+Eval-set leakage is the most common way specialization training fools itself: eval documents mixed into the training set inflate the metrics. Pass eval_file and they are dropped automatically."""
 import json, os, glob, sys
 from collections import Counter
 
@@ -9,16 +9,16 @@ BATCH_DIR = sys.argv[1] if len(sys.argv) > 1 else "./train-batch"
 OUT_FILE = sys.argv[2] if len(sys.argv) > 2 else "./trainset.jsonl"
 EVAL_FILE = sys.argv[3] if len(sys.argv) > 3 else None
 
-# 1. 评测集文档 id 排除名单(防训练/评测泄漏)
+# 1. Eval-set document-id exclusion list (prevents train/eval leakage)
 eval_ids = set()
 if EVAL_FILE and os.path.exists(EVAL_FILE):
     for line in open(EVAL_FILE):
         line = line.strip()
         if line:
             eval_ids.add(json.loads(line).get("gold_id") or json.loads(line).get("source_id"))
-    print(f"评测集排除名单: {len(eval_ids)} 篇")
+    print(f"Eval-set exclusion list: {len(eval_ids)} documents")
 
-# 2. 合并+统计
+# 2. Merge + stats
 rows, seen, stats = [], set(), Counter()
 for fp in sorted(glob.glob(os.path.join(BATCH_DIR, "*.jsonl"))):
     for line in open(fp):
@@ -47,7 +47,7 @@ with open(OUT_FILE, "w") as f:
     for d in rows:
         f.write(json.dumps(d, ensure_ascii=False) + "\n")
 
-print(f"训练集: {len(rows)} 条 → {OUT_FILE}")
-print("统计(失败率是训练集质量的第一信号):")
+print(f"Training set: {len(rows)} samples -> {OUT_FILE}")
+print("Stats (the failure rate is the first signal of training-set quality):")
 for k, v in stats.most_common():
     print(f"  {k}: {v}")
