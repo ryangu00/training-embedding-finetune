@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# run-fanout.sh <doc_id_list.txt> [outdir] [parallel] — 批量并行生成训练样本
-# doc_id_list.txt: 每行一个文档 id(你的文档库枚举命令产出)
+# run-fanout.sh <doc_id_list.txt> [outdir] [parallel] — batch parallel training-sample generation
+# doc_id_list.txt: one document id per line (produced by your document store's enumeration command)
 set -uo pipefail
 LIST="$1"; OUTDIR="${2:-./train-batch}"; PAR="${3:-8}"
 mkdir -p "$OUTDIR"
-# 断点续跑:已有输出的 id 跳过
+# resumable: ids that already have output are skipped
 todo=0
 while IFS= read -r id; do
   [ -z "$id" ] && continue

@@ -1,46 +1,46 @@
-# 自训 Embedding 模型:从训练集生成到 Ollama 生产部署全程
+# Fine-Tuning Your Own Embedding Model: From Training-Set Generation to Ollama Production Deployment
 
-> 用自己的知识库风格微调一个 embedding 模型并部署到 Ollama 常驻服务——训练管线、部署方法、
-> 和三个把我们坑得不轻的生产事故(其中一个让检索静默退化了很久才被发现)。
-> 训练集生成脚本随本 repo 提供;我们的训练数据本身不发布(含私有语料),但 schema 与方法完整可复现。
+> Fine-tune an embedding model on your own knowledge base's style and deploy it as a resident Ollama service — the training pipeline, the deployment method,
+> and three production incidents that hurt us badly (one of them silently degraded retrieval for a long time before anyone noticed).
+> The training-set generation scripts ship with this repo; our training data itself is not published (it contains private corpora), but the schema and method are fully reproducible.
 
-## 训练管线(脚本随 repo)
+## Training pipeline (scripts included in this repo)
 
 ```
 scripts/
-  gen-train-one.sh      # 单条训练样本生成(LLM 辅助:prompt 要点=给定段落,生成'会用这个段落回答的自然问句'+一个同主题迷惑负段落;附拒绝标准防低质样本)
-  run-fanout.sh         # 批量并行扇出生成
-  merge-and-verify.py   # 合并+去重+schema 校验(带失败样本落盘,不静默丢)
+  gen-train-one.sh      # Generate one training sample (LLM-assisted: the prompt's core = given a passage, generate a natural question that this passage would answer + one confusable negative passage on the same topic; includes rejection criteria to block low-quality samples)
+  run-fanout.sh         # Batch parallel fan-out generation
+  merge-and-verify.py   # Merge + dedupe + schema validation (failed samples are written to disk, never silently dropped)
 ```
 
-训练集 schema(JSONL,每行):
+Training-set schema (JSONL, one per line):
 ```json
-{"query": "<检索意图问句>", "positive": "<应命中的段落>", "negative": "<不应命中的相近段落>"}
+{"query": "<retrieval-intent question>", "positive": "<the passage that should be hit>", "negative": "<a nearby passage that should NOT be hit>"}
 ```
-要点:
-- **负样本用"相近但错误"的段落**(同主题不同实体/同实体不同时段),比随机负样本训出的模型判别力强得多。
-- 生成失败的样本进 errors.jsonl 留档,别静默丢——失败率统计是训练集质量的第一信号。
-- 规模参考:我们两轮迭代训练集从 ~200KB 增到 ~560KB(JSONL);经验判断(非对照实验):第二轮收益主要来自负样本质量而非数量。
+Key points:
+- **Use "close but wrong" passages as negatives** (same topic, different entity / same entity, different time period) — this trains a far more discriminative model than random negatives.
+- Failed generations go into errors.jsonl for the record; never silently drop them — the failure-rate statistics are the first signal of training-set quality.
+- Scale reference: across two iterations our training set grew from ~200KB to ~560KB (JSONL); our judgment from experience (not a controlled experiment): the second round's gains came mainly from negative-sample quality, not quantity.
 
-## 部署(Ollama + Modelfile)
+## Deployment (Ollama + Modelfile)
 
-**一键部署**:`scripts/deploy-ollama.sh <你的.gguf> <名字-ft>`——强制 -ft 独立命名(事故 #2 防御)→num_batch 16384 显式→长输入断言→向量指纹落盘(canary 守卫底座)。手动:
+**One-command deploy**: `scripts/deploy-ollama.sh <your.gguf> <name-ft>` — enforces a distinct `-ft` name (defense against incident #2) → explicit num_batch 16384 → long-input assertion → vector fingerprint written to disk (the foundation of the canary guard). Manual path:
 
-微调产物转 GGUF 后用 Modelfile 建成 Ollama 模型服务。**关键参数**:
+Convert the fine-tuned weights to GGUF, then build an Ollama model service with a Modelfile. **Critical parameter**:
 
 ```
 PARAMETER num_batch 16384
 ```
 
-## 三个生产事故(本书的核心价值)
+## Three production incidents (the core value of this book)
 
-1. **num_batch 默认值崩长输入**:Ollama embedding runner 默认 `num_batch 2048`——输入超过 2048 token 直接 **EOF 崩溃**,上游只看到"embedding 全失败"。我们的批量写入任务整体瘫痪,根因却藏在这个默认值里。**Modelfile 里显式 `num_batch 16384`,且每次重建模型都要带上**(我们修复后又漏过一次,留了个 NULL 洞)。
-2. **`ollama pull` 会静默覆盖同名自训模型**:自训模型若用了与官方库相同的 model tag,任何人/任何自动化对该 tag 跑一次 pull,自训权重就被 stock 版覆盖——**检索质量静默退化,没有任何报错**。防御:①自训模型用**独立命名**(带 `-ft` 后缀等),永不与官方名冲突;②部署一个 canary 守卫脚本:定期用一个已知 query 打 embedding,比对向量指纹,漂移即告警。
-3. **验证要看内容不能只看字节**:部署后验证"模型是对的"不能只 `ls -l` 看文件大小——stock 和自训版大小几乎一样。用固定输入的 embedding 向量前 N 维指纹做断言。
+1. **The num_batch default crashes on long inputs**: the Ollama embedding runner defaults to `num_batch 2048` — any input over 2048 tokens **crashes with EOF**, and upstream only sees "all embeddings failing". Our batch-write job went down entirely, with the root cause hiding in this default. **Set `num_batch 16384` explicitly in the Modelfile, and carry it along every time you rebuild the model** (after fixing it once we missed it again on a rebuild, leaving a NULL hole).
+2. **`ollama pull` silently overwrites a same-named fine-tuned model**: if your fine-tuned model uses the same model tag as one in the official library, any person or any automation running a single pull on that tag replaces your fine-tuned weights with the stock version — **retrieval quality silently degrades, with no error whatsoever**. Defense: (1) give fine-tuned models a **distinct name** (a `-ft` suffix or similar) that can never collide with an official name; (2) deploy a canary guard script: periodically embed a known query, compare the vector fingerprint, alert on drift.
+3. **Verify content, not just bytes**: post-deploy verification that "the model is the right one" cannot rely on `ls -l` file sizes — the stock and fine-tuned versions are nearly identical in size. Assert on a fingerprint of the first N dimensions of the embedding vector for a fixed input.
 
-## 效果口径
+## Measurement methodology
 
-自训收益体现在**你自己语料的检索命中率**上(域内术语/命名习惯/文档结构),通用基准上未必好看——这是特化的本意。评测方法:留出集上 recall@k(k 取检索链路实际召回数,常见 5/10)对比 stock 模型,用真实查询日志做 query 源,留出比例 10-20%。
+The fine-tuning gains show up in **retrieval hit rate on your own corpus** (in-domain terminology, naming conventions, document structure); scores on general benchmarks may well not look good — that is the whole point of specialization. Evaluation method: recall@k on a held-out set (k = the actual retrieval count of your production pipeline, commonly 5/10) versus the stock model, with real query logs as the query source and a 10-20% held-out ratio.
 
 ---
-*RyanAI Lab · 训练管线与事故实录,更新于 2026-09。训练数据不随 repo 发布(含私有语料),方法与 schema 完整。*
+*RyanAI Lab · All numbers measured on our resident environment. Updated 2026-09. Issues welcome.*
