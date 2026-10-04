@@ -43,7 +43,7 @@ import os
 fpdir = os.path.expanduser("~/.local/share/embed-canary"); os.makedirs(fpdir, exist_ok=True)
 fpp = f"{fpdir}/{name}-fingerprint.json"
 open(fpp, "w").write(json.dumps({"probe": "fixed", "fp8": fp}))
-print(f"  vector fingerprint saved to {fpp} (persistent location; canary guard: periodically re-embed the same input and compare — drift = weights were overwritten)")
+print(f"  vector fingerprint saved to {fpp} (persistent location; canary guard: periodically re-embed the same input and compare — drift needs investigation: an overwrite is one cause, so confirm with a cosine against a reference vector on the same machine)")
 PY
 say "✅ Deploy complete: POST 127.0.0.1:11434/api/embed model=$NAME"
 say "Recommended: turn the fingerprint comparison into a scheduled job (canary guard, the long-term defense for incident #2)"
